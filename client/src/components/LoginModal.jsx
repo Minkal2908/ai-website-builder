@@ -16,6 +16,7 @@ const dispatch=useDispatch()
                 email:result.user.email,
                 avatar:result.user.photoURL
             },{withCredentials:true})
+            localStorage.setItem("token", data.token)
             dispatch(setUserData(data))
             onClose()
         } catch (error) {

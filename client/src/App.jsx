@@ -1,3 +1,4 @@
+import axios from "axios"
 import React from 'react'
 import {BrowserRouter, Navigate, Route, Routes} from "react-router-dom"
 import Home from './pages/Home'
@@ -10,6 +11,15 @@ import LiveSite from './pages/LiveSite'
 import Pricing from './pages/Pricing'
 
 export const serverUrl="https://ai-website-builder-backend-r8ay.onrender.com"
+axios.interceptors.request.use((config) => {
+  const token = localStorage.getItem("token")
+
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+
+  return config
+})
 function App() {
   useGetCurrentUser()
   const {userData}=useSelector(state=>state.user)

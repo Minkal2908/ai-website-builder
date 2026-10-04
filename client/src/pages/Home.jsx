@@ -25,6 +25,7 @@ function Home() {
         console.log("logout click")
         try {
             await axios.get(`${serverUrl}/api/auth/logout`, { withCredentials: true })
+            localStorage.removeItem("token")
             dispatch(setUserData(null))
             setOpenProfile(false)
         } catch (error) {

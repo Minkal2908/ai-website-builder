@@ -17,7 +17,7 @@ const dispatch=useDispatch()
                 avatar:result.user.photoURL
             },{withCredentials:true})
             localStorage.setItem("token", data.token)
-            dispatch(setUserData(data))
+            dispatch(setUserData(data.user))
             onClose()
         } catch (error) {
             console.log(error)

@@ -2,6 +2,7 @@ import { generateResponse } from "../config/openRouter.js";
 import User from "../models/user.model.js";
 import Website from "../models/website.model.js";
 import extractJson from "../utils/extractJson.js";
+import { searchUnsplashImage } from "../services/unsplash.service.js";
 
 const masterPrompt = `
 YOU ARE A PRINCIPAL FRONTEND ARCHITECT
@@ -64,18 +65,38 @@ YOU MUST IMPLEMENT:
 
 IF THE WEBSITE IS NOT RESPONSIVE → RESPONSE IS INVALID.
 
---------------------------------------------------
 IMAGES (MANDATORY & RESPONSIVE)
 --------------------------------------------------
-- Use high-quality images ONLY from:
+- Images must be relevant to the website content.
+- DO NOT generate or invent Unsplash image URLs.
+- DO NOT use:
   https://images.unsplash.com/
-- EVERY image URL MUST include:
-  ?auto=format&fit=crop&w=1200&q=80
+  directly in the generated HTML.
+- NEVER invent photo IDs or image URLs.
 
-- Images must:
-  - Be responsive (max-width: 100%)
-  - Resize correctly on mobile
-  - Never overflow containers
+FOR EVERY IMAGE:
+- Use an <img> element with a data-image-query attribute.
+- The data-image-query value must be a short, descriptive search query.
+- Use this exact structure:
+  <img src="" data-image-query="descriptive search query" alt="descriptive alt text">
+
+EXAMPLES:
+<img src="" data-image-query="Mussoorie mountain valley India" alt="Mussoorie mountain valley">
+<img src="" data-image-query="modern restaurant interior" alt="Modern restaurant interior">
+<img src="" data-image-query="luxury hotel room" alt="Luxury hotel room">
+
+IMAGE RULES:
+- Every image MUST have data-image-query.
+- Search queries must match the actual image content required.
+- Use different queries for different images when appropriate.
+- Do not use placeholder images.
+- Do not use base64 images.
+- Do not use SVG image placeholders.
+
+RESPONSIVE IMAGE RULES:
+- Images must use max-width: 100%.
+- Images must resize correctly on mobile.
+- Images must never overflow their containers.
 
 --------------------------------------------------
 TECHNICAL RULES (VERY IMPORTANT)
@@ -90,6 +111,7 @@ TECHNICAL RULES (VERY IMPORTANT)
 - No page reloads
 - No dead UI
 - No broken buttons
+
 --------------------------------------------------
 SPA VISIBILITY RULE (MANDATORY)
 --------------------------------------------------
@@ -151,40 +173,88 @@ ABSOLUTE RULES
 - IF FORMAT IS BROKEN → RESPONSE IS INVALID
 `;
 
+const resolveImageUrls = async (html) => {
+    const imageRegex = /<img\b([^>]*?)data-image-query=["']([^"']+)["']([^>]*)>/gi;
+    const matches = [...html.matchAll(imageRegex)];
+
+    let updatedHtml = html;
+
+    for (const match of matches) {
+        const fullTag = match[0];
+        const query = match[2].trim();
+
+        const imageUrl = await searchUnsplashImage(query);
+
+        if (!imageUrl) {
+            console.log(`No Unsplash image found for: ${query}`);
+            continue;
+        }
+
+        let updatedTag = fullTag;
+
+        if (/\bsrc\s*=\s*["'][^"']*["']/i.test(updatedTag)) {
+            updatedTag = updatedTag.replace(
+                /\bsrc\s*=\s*["'][^"']*["']/i,
+                `src="${imageUrl}"`
+            );
+        } else {
+            updatedTag = updatedTag.replace(
+                "<img",
+                `<img src="${imageUrl}"`
+            );
+        }
+
+        updatedHtml = updatedHtml.replace(fullTag, updatedTag);
+    }
+
+    return updatedHtml;
+};
 
 export const generateWebsite = async (req, res) => {
     try {
-        const { prompt } = req.body
+        const { prompt } = req.body;
+
         if (!prompt) {
-            return res.status(400).json({ message: "prompt is required" })
+            return res.status(400).json({ message: "prompt is required" });
         }
-        const user = await User.findById(req.user._id)
+
+        const user = await User.findById(req.user._id);
 
         if (!user) {
-            return res.status(400).json({ message: "user not found" })
-        }
-        if (user.credits < 50) {
-            return res.status(400).json({ message: "you have not enough credits to generate a webiste" })
+            return res.status(400).json({ message: "user not found" });
         }
 
-        const finalPrompt = masterPrompt.replace("USER_PROMPT", prompt)
-        let raw = ""
-        let parsed = null
+        if (user.credits < 50) {
+            return res.status(400).json({
+                message: "you have not enough credits to generate a webiste"
+            });
+        }
+
+        const finalPrompt = masterPrompt.replace("USER_PROMPT", prompt);
+
+        let raw = "";
+        let parsed = null;
+
         for (let i = 0; i < 2 && !parsed; i++) {
-            raw = await generateResponse(finalPrompt)
-            parsed = await extractJson(raw)
+            raw = await generateResponse(finalPrompt);
+            parsed = await extractJson(raw);
 
             if (!parsed) {
-                raw = await generateResponse(finalPrompt + "\n\nRETURN ONLY RAW JSON.")
-                parsed = await extractJson(raw)
+                raw = await generateResponse(
+                    finalPrompt + "\n\nRETURN ONLY RAW JSON."
+                );
+                parsed = await extractJson(raw);
             }
-
         }
 
         if (!parsed.code) {
-            console.log("ai returned invalid response", raw)
-            return res.status(400).json({ message: "ai returned invalid response" })
+            console.log("ai returned invalid response", raw);
+            return res.status(400).json({
+                message: "ai returned invalid response"
+            });
         }
+
+        parsed.code = await resolveImageUrls(parsed.code);
 
         const website = await Website.create({
             user: user._id,
@@ -199,22 +269,23 @@ export const generateWebsite = async (req, res) => {
                     role: "ai",
                     content: parsed.message
                 }
-                
             ]
-        })
+        });
 
-        user.credits = user.credits - 50
-        await user.save()
+        user.credits = user.credits - 50;
+        await user.save();
 
         return res.status(201).json({
             websiteId: website._id,
             remainingCredits: user.credits
-        })
+        });
 
     } catch (error) {
-        return res.status(500).json({ message: `generate website error ${error}` })
+        return res.status(500).json({
+            message: `generate website error ${error}`
+        });
     }
-}
+};
 
 
 export const getWebsiteById = async (req, res) => {
@@ -222,41 +293,57 @@ export const getWebsiteById = async (req, res) => {
         const website = await Website.findOne({
             _id: req.params.id,
             user: req.user._id
-        })
+        });
 
         if (!website) {
-            return res.status(400).json({ message: "website not found" })
+            return res.status(400).json({
+                message: "website not found"
+            });
         }
-        return res.status(200).json(website)
+
+        return res.status(200).json(website);
+
     } catch (error) {
-        return res.status(500).json({ message: `get website by id error ${error}` })
+        return res.status(500).json({
+            message: `get website by id error ${error}`
+        });
     }
-}
+};
 
 
 export const changes = async (req, res) => {
     try {
-        const { prompt } = req.body
+        const { prompt } = req.body;
+
         if (!prompt) {
-            return res.status(400).json({ message: "prompt is required" })
+            return res.status(400).json({
+                message: "prompt is required"
+            });
         }
 
         const website = await Website.findOne({
             _id: req.params.id,
             user: req.user._id
-        })
+        });
 
         if (!website) {
-            return res.status(400).json({ message: "website not found" })
+            return res.status(400).json({
+                message: "website not found"
+            });
         }
 
-        const user = await User.findById(req.user._id)
+        const user = await User.findById(req.user._id);
 
         if (!user) {
-            return res.status(400).json({ message: "user not found" })
+            return res.status(400).json({
+                message: "user not found"
+            });
         }
+
         if (user.credits < 25) {
-            return res.status(400).json({ message: "you have not enough credits to generate a webiste" })
+            return res.status(400).json({
+                message: "you have not enough credits to generate a webiste"
+            });
         }
 
         const updatePrompt = `
@@ -268,107 +355,143 @@ ${website.latestCode}
 USER REQUEST:
 ${prompt}
 
+IMAGE RULES:
+- Never invent or generate Unsplash image URLs.
+- Never use random images.unsplash.com photo IDs.
+- For every new image, use:
+  <img src="" data-image-query="short descriptive search query" alt="descriptive alt text">
+- Keep existing valid image URLs unchanged unless the user asks to change the image.
+- If the user asks to add or replace an image, use data-image-query.
+
 RETURN RAW JSON ONLY:
 {
   "message": "Short confirmation",
   "code": "<UPDATED FULL HTML>"
 }
 `
-        let raw = ""
-        let parsed = null
+
+        let raw = "";
+        let parsed = null;
+
         for (let i = 0; i < 2 && !parsed; i++) {
-            raw = await generateResponse(updatePrompt)
-            parsed = await extractJson(raw)
+            raw = await generateResponse(updatePrompt);
+            parsed = await extractJson(raw);
 
             if (!parsed) {
-                raw = await generateResponse(updatePrompt + "\n\nRETURN ONLY RAW JSON.")
-                parsed = await extractJson(raw)
+                raw = await generateResponse(
+                    updatePrompt + "\n\nRETURN ONLY RAW JSON."
+                );
+                parsed = await extractJson(raw);
             }
-
         }
 
         if (!parsed.code) {
-            console.log("ai returned invalid response", raw)
-            return res.status(400).json({ message: "ai returned invalid response" })
+            console.log("ai returned invalid response", raw);
+            return res.status(400).json({
+                message: "ai returned invalid response"
+            });
         }
 
+        parsed.code = await resolveImageUrls(parsed.code);
 
         website.conversation.push(
             { role: "user", content: prompt },
-            { role: "ai", content: parsed.message },
-        )
+            { role: "ai", content: parsed.message }
+        );
 
-        website.latestCode = parsed.code
+        website.latestCode = parsed.code;
 
-        await website.save()
-        user.credits = user.credits - 25
-        await user.save()
+        await website.save();
+
+        user.credits = user.credits - 25;
+        await user.save();
 
         return res.status(200).json({
-            message:parsed.message,
-            code:parsed.code,
+            message: parsed.message,
+            code: parsed.code,
             remainingCredits: user.credits
-        })
-
+        });
 
     } catch (error) {
-        console.log(error)
- return res.status(500).json({ message: `update website error ${error}` })
+        console.log(error);
+
+        return res.status(500).json({
+            message: `update website error ${error}`
+        });
     }
-}
+};
 
 
-
-export const getAll=async (req,res) => {
+export const getAll = async (req, res) => {
     try {
-        const websites=await Website.find({user:req.user._id})
-        return res.status(200).json(websites)
+        const websites = await Website.find({
+            user: req.user._id
+        });
+
+        return res.status(200).json(websites);
+
     } catch (error) {
-        return res.status(500).json({ message: `get all websites error ${error}` })
+        return res.status(500).json({
+            message: `get all websites error ${error}`
+        });
     }
-}
+};
 
 
-export const deploy=async (req,res)=>{
+export const deploy = async (req, res) => {
     try {
-         const website = await Website.findOne({
+        const website = await Website.findOne({
             _id: req.params.id,
             user: req.user._id
-        })
+        });
 
         if (!website) {
-            return res.status(400).json({ message: "website not found" })
+            return res.status(400).json({
+                message: "website not found"
+            });
         }
 
-        if(!website.slug){
-            website.slug=website.title.toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,60)+website._id.toString().slice(-5)              
+        if (!website.slug) {
+            website.slug = website.title
+                .toLowerCase()
+                .replace(/[^a-z0-9]/g, "")
+                .slice(0, 60) + website._id.toString().slice(-5);
         }
 
-        website.deployed=true
-        website.deployUrl=`${process.env.FRONTEND_URL}/site/${website.slug}`
-        await website.save()
+        website.deployed = true;
+        website.deployUrl = `${process.env.FRONTEND_URL}/site/${website.slug}`;
+
+        await website.save();
 
         return res.status(200).json({
-            url:website.deployUrl
-        })
+            url: website.deployUrl
+        });
 
     } catch (error) {
-         return res.status(500).json({ message: `deploy website error ${error}` })
+        return res.status(500).json({
+            message: `deploy website error ${error}`
+        });
     }
-}
+};
 
 
-export const getBySlug=async (req,res) => {
+export const getBySlug = async (req, res) => {
     try {
-         const website = await Website.findOne({
+        const website = await Website.findOne({
             slug: req.params.slug
-        })
+        });
 
         if (!website) {
-            return res.status(400).json({ message: "website not found" })
+            return res.status(400).json({
+                message: "website not found"
+            });
         }
-          return res.status(200).json(website)
+
+        return res.status(200).json(website);
+
     } catch (error) {
-        return res.status(500).json({ message: `get by slug website error ${error}` })
+        return res.status(500).json({
+            message: `get by slug website error ${error}`
+        });
     }
-}
+};

@@ -174,41 +174,44 @@ ABSOLUTE RULES
 `;
 
 const resolveImageUrls = async (html) => {
-    const imageRegex = /<img\b([^>]*?)data-image-query=["']([^"']+)["']([^>]*)>/gi;
-    const matches = [...html.matchAll(imageRegex)];
+    const imageRegex = /<img\b([^>]*?)data-image-query=["']([^"']+)["']([^>]*)>/gi
+    const matches = [...html.matchAll(imageRegex)]
 
-    let updatedHtml = html;
+    let updatedHtml = html
 
     for (const match of matches) {
-        const fullTag = match[0];
-        const query = match[2].trim();
+        const fullTag = match[0]
+        const query = match[2].trim()
 
-        const imageUrl = await searchUnsplashImage(query);
+        const imageUrl = await searchUnsplashImage(query)
 
-        if (!imageUrl) {
-            console.log(`No Unsplash image found for: ${query}`);
-            continue;
-        }
+        let updatedTag = fullTag
 
-        let updatedTag = fullTag;
-
-        if (/\bsrc\s*=\s*["'][^"']*["']/i.test(updatedTag)) {
+        if (imageUrl) {
+            if (/\bsrc\s*=\s*["'][^"']*["']/i.test(updatedTag)) {
+                updatedTag = updatedTag.replace(
+                    /\bsrc\s*=\s*["'][^"']*["']/i,
+                    `src="${imageUrl}"`
+                )
+            } else {
+                updatedTag = updatedTag.replace(
+                    "<img",
+                    `<img src="${imageUrl}"`
+                )
+            }
+        } else {
+            // Prevent broken-image icon when no result is found
             updatedTag = updatedTag.replace(
                 /\bsrc\s*=\s*["'][^"']*["']/i,
-                `src="${imageUrl}"`
-            );
-        } else {
-            updatedTag = updatedTag.replace(
-                "<img",
-                `<img src="${imageUrl}"`
-            );
+                'src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="'
+            )
         }
 
-        updatedHtml = updatedHtml.replace(fullTag, updatedTag);
+        updatedHtml = updatedHtml.replace(fullTag, updatedTag)
     }
 
-    return updatedHtml;
-};
+    return updatedHtml
+}
 
 export const generateWebsite = async (req, res) => {
     try {
